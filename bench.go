@@ -12,17 +12,17 @@ import (
 	"time"
 )
 
-var cocurrency = flag.Uint64("c", 20, "cocurrency request to lanch") //并发发包的微线程数（可以理解为发包客户端数）
-var totalRequest = flag.Uint64("t", 40, "total request to issue")
-var pkgfile = flag.String("p", "", "pkg file to send")
-var proto = flag.String("f", "udp", "udp or tcp")
-var svrAddress = flag.String("s", "", "server addr, ie, 192.168.0.1:9981")
-var deadline = flag.Int64("d", 200, "socket read/write timeout in ms")
-var dumpRespone = flag.Bool("v", false, "dump response")
-var cocurencyPrintCycle = flag.Uint64("q", 0, "cocurrency print cycle, mearsured in second")
-var dumpError = flag.Bool("e", false, "dump error or not")
+var cocurrency = flag.Uint64("c", 20, "cocurrency request to lanch")                         //并发发包的微线程数（可以理解为客户端数）
+var totalRequest = flag.Uint64("t", 40, "total request to issue")                            //总请求数
+var pkgfile = flag.String("p", "", "pkg file to send")                                       //二进制文件
+var proto = flag.String("f", "udp", "udp or tcp")                                            //协议
+var svrAddress = flag.String("s", "", "server addr, ie, 192.168.0.1:9981")                   //服务器地址和端口
+var deadline = flag.Int64("d", 200, "socket read/write timeout in ms")                       //发包超时时间
+var dumpRespone = flag.Bool("v", false, "dump response")                                     //是否打印收包buf
+var cocurencyPrintCycle = flag.Uint64("q", 0, "cocurrency print cycle, mearsured in second") //多久打印一次结果
+var dumpError = flag.Bool("e", false, "dump error or not")                                   //是否打印错误
 
-var pkgToSend []byte
+var pkgToSend []byte //发包内容
 
 func init() {
 	flag.Parse()
@@ -33,7 +33,6 @@ func init() {
 	}
 
 	var err error
-
 	if pkgToSend, err = ioutil.ReadFile(*pkgfile); err != nil {
 		panic(err)
 	}
@@ -46,8 +45,8 @@ func init() {
 }
 
 type taskError struct {
-	taskId uint64
-	err    error
+	taskId uint64 //任务id
+	err    error  //具体错误信息
 }
 
 func (te taskError) String() string {
@@ -56,21 +55,21 @@ func (te taskError) String() string {
 
 type bencher struct {
 	lock        sync.Mutex
-	dialErrCnt  int64
+	dialErrCnt  int64 //连接错误数
 	dialErrs    []taskError
-	writeErrCnt int64
+	writeErrCnt int64 //发包错误数
 	writeErrs   []taskError
-	readErrCnt  int64
+	readErrCnt  int64 //收包错误数
 	readErrs    []taskError
-	successCnt  int64
+	successCnt  int64 //成功数
 }
 
 func (b *bencher) Setup(id int64) {
 
 }
 
-//implement
-func (b *bencher) Do(id uint64, _ int64) { //实际发包的函数
+/* 发包回调 */
+func (b *bencher) Do(id uint64, _ int64) {
 	buf := make([]byte, 4096)
 	resCnt := 0
 
@@ -117,6 +116,7 @@ quit:
 	return
 }
 
+/* 数据信息回调 */
 func (b *bencher) Report(dumpError bool, duration time.Duration) {
 	total := b.dialErrCnt + b.writeErrCnt + b.successCnt + b.readErrCnt
 	fmt.Printf("============================\n")
@@ -162,9 +162,9 @@ func (b *bencher) Report(dumpError bool, duration time.Duration) {
 }
 
 func main() {
-	benchlb := tb.NewBencher(*cocurrency)
-	b := new(bencher)
-	duration := benchlb.Start(b, *totalRequest, *cocurencyPrintCycle)
+	benchlb := tb.NewBencher(*cocurrency)                             //底层携程框架
+	b := new(bencher)                                                 //回调接口
+	duration := benchlb.Start(b, *totalRequest, *cocurencyPrintCycle) //启动
 
 	fmt.Printf("\nbench take %s\n", duration)
 	b.Report(*dumpError, duration)

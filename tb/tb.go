@@ -20,18 +20,19 @@ type taskInfo struct {
 }
 
 type Bencher struct {
-	Cocurrency   uint64        // cocurrency work schedual one time
+	Cocurrency   uint64        // 并发数
 	taskBucket   chan taskInfo // use make(chan int, Cocurrency) to simulate limited resources
 	ticketBucket chan int      //只有从这里获取到ticket才能执行任务
 
-	// task statistics
-	completedWork      uint64
-	numOfWorkerRunning int64
-	lastReportTime     time.Time
-	lastCompleted      uint64
-	closed             uint64
+	/* 打印的统计信息 */
+	completedWork      uint64    //当前完成任务总数
+	numOfWorkerRunning int64     //当前正在执行任务数
+	lastReportTime     time.Time //最近一次打印报告时间
+	lastCompleted      uint64    //上次完成的任务总数
+	closed             uint64    //当前关闭的woker数
 }
 
+/* 简单工厂 */
 func NewBencher(cocurrency uint64) *Bencher {
 	return &Bencher{
 		Cocurrency: cocurrency,
@@ -45,32 +46,31 @@ func (b *Bencher) Start(task Task, total uint64, updateInterval uint64) time.Dur
 
 	fmt.Println("cocurrency:", b.Cocurrency)
 
-	b.taskBucket = make(chan taskInfo, b.Cocurrency)
-	b.ticketBucket = make(chan int, b.Cocurrency)
+	b.taskBucket = make(chan taskInfo, b.Cocurrency) //并发数个任务篮子(相当于任务队列)
+	b.ticketBucket = make(chan int, b.Cocurrency)    //并发数个票据, 控制流入速度
 
 	workder := func(task Task, id uint64) {
-		for { // work restlessly
+		for {
 			tinfo, ok := <-b.taskBucket // 拿任务
 
-			// if chann closed stop worker
+			/* 关闭 */
 			if false == ok {
 				atomic.AddUint64(&b.closed, 1)
 				break
 			}
 
 			atomic.AddInt64(&b.numOfWorkerRunning, 1)
-			task.Do(id, tinfo.index)
+			task.Do(id, tinfo.index) //执行回调，一般做发包操作
 
 			atomic.AddUint64(&b.completedWork, 1)
 			atomic.AddInt64(&b.numOfWorkerRunning, -1)
 
-			// task finshed, return a ticket
 			b.ticketBucket <- Ticket //告诉管理层，我任务完成了，归还票据
 		}
 	}
 
 	start := time.Now()
-	for i := uint64(0); i < b.Cocurrency; i++ { //开启b.Cocurrency个微线程并发处理任务
+	for i := uint64(0); i < b.Cocurrency; i++ { //开启b.Cocurrency个协程并发处理任务
 		go workder(task, i)
 	}
 
@@ -82,34 +82,34 @@ func (b *Bencher) Start(task Task, total uint64, updateInterval uint64) time.Dur
 
 	quitReport := make(chan bool)
 	if updateInterval > 0 {
-		go b.reportCocurrency(updateInterval, quitReport) // 每隔updateInterval则报告一次数据
+		go b.reportCocurrency(updateInterval, quitReport) // 每隔updateInterval报告一次数据
 	}
 
-	// feed workers with task
+	/* 初始化：给每个worker发一个任务 */
 	go func() {
 		for i := uint64(0); i < b.Cocurrency; i++ {
 			b.taskBucket <- taskInfo{index: nextIndex()}
 		}
 	}()
 
-	// wait to start other tasks
+	/* 塞任务 */
 	for i := b.Cocurrency; i < total; i++ {
-		<-b.ticketBucket //有人归还票据了，说明有微线程闲下来了，塞任务给他吧
+		<-b.ticketBucket //有人归还票据了，说明有协程闲下来了，塞任务给他吧
 		b.taskBucket <- taskInfo{index: nextIndex()}
 	}
 
-	// wait for all work to be completed
+	/* wait for all work to be completed */
 	for atomic.LoadUint64(&b.completedWork) < total {
 		runtime.Gosched() //让出CPU
 	}
 
-	close(b.taskBucket) //各微线程会自动退出
+	close(b.taskBucket) //各协程会自动退出
 
 	for atomic.LoadUint64(&b.closed) < b.Cocurrency {
 		runtime.Gosched()
 	}
 
-	// quit report
+	/* quit report */
 	if updateInterval > 0 {
 		quitReport <- true
 	}
@@ -140,6 +140,7 @@ func (b *Bencher) reportCocurrency(interval uint64, quit <-chan bool) {
 			elapsedTime := time.Since(b.lastReportTime)
 			delta := curCompleted - b.lastCompleted
 
+			/* 时间、当前完成任务总数、当前并发woker数、当前interval的qps(任务数/s) */
 			fmt.Printf("%s: completed tasks(%d), cocurrencye(%d), realtime qps(%0.2f)\n",
 				time.Now(), curCompleted, b.numOfWorkerRunning,
 				float64(delta)/(float64(elapsedTime)/float64(time.Second)))
